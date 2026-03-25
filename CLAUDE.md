@@ -10,23 +10,43 @@ This is the top-level context repository for the Hydration DeFi protocol. It pro
 | UI | https://github.com/galacticcouncil/hydration-ui | Frontend application |
 | SDK | https://github.com/galacticcouncil/sdk | Developer SDK |
 
-## Working with this project
+## Accessing repo code
 
-- **Runtime tasks:** Clone the runtime repo. The UI and SDK repos are not needed for runtime work.
-- **Frontend tasks:** Both the UI and SDK repos are needed. Clone them only when required.
-- **Clone location:** Clone repos into this directory for full context. Before cloning, ask whether the repo already exists elsewhere — it may be better to symlink it or use a custom location (check one level up first).
+When a skill or task needs to read code from hydration-node, hydration-ui, or sdk, ask the user:
 
-## Skills and agents
+> Are the repos cloned locally (one directory up from here), or should I fetch from GitHub?
 
-This repository ships custom Claude skills and agents in `claude/skills/`. To install them:
+- **Local:** Look in `../hydration-node/`, `../hydration-ui/`, `../sdk/`
+- **GitHub:** Fetch files via WebFetch from the raw URLs (e.g., `https://raw.githubusercontent.com/galacticcouncil/hydration-node/main/...`)
 
-1. **Ask the user** whether they want to install the provided skills/agents.
+## Skills
+
+### Hosted in this repo
+
+| Skill | Path | Description |
+|-------|------|-------------|
+| `spec-writer` | `claude/skills/spec-writer/` | Feature spec writing. `--ui` for frontend, `--full` for both runtime and UI. |
+
+To install a skill to a target project:
+
+1. **Ask the user** whether they want to install the skill.
 2. **Propose two options:**
-   - **Global install** — copy skills/agents/commands to `~/.claude/` so they are available across all projects.
-   - **Project-specific install** — copy to the target project's `.claude/` directory.
-3. If working directly in this repository, copy to the target project's `.claude/` directory.
+   - **Global install** — copy to `~/.claude/skills/` (available across all projects).
+   - **Project-specific install** — copy to the target project's `.claude/skills/` directory.
+
+### Hosted in other repos
+
+| Skill | Repo | Description |
+|-------|------|-------------|
+| `security_audit` | hydration-node | Security audit for Substrate runtimes. References context from this repo via GitHub. |
 
 ## Reference material
 
-- `general/hydration.md` — Protocol overview (products, architecture, governance, tokenomics)
-- `claude/skills/hydration-auditor/` — Security audit skill with attack vector references
+Protocol context documents available for WebFetch from other repos:
+
+| Document | Raw URL |
+|----------|---------|
+| Protocol overview (products, architecture, governance, tokenomics) | `https://raw.githubusercontent.com/galacticcouncil/hydration/main/general/hydration.md` |
+| Omnipool deep dive (mechanics, math, risk model) | `https://raw.githubusercontent.com/galacticcouncil/hydration/main/general/omnipool.md` |
+
+Fetch whichever documents are relevant to the task at hand.
