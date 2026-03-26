@@ -7,6 +7,7 @@ This is the top-level context repository for the Hydration DeFi protocol. It pro
 | Component | Repository | Description |
 |-----------|-----------|-------------|
 | Runtime | https://github.com/galacticcouncil/hydration-node | Substrate-based blockchain runtime (Rust) |
+| AAVE v3 | https://github.com/galacticcouncil/aave-v3-deploy | EVM smart contracts & configs for the AAVE v3 fork (money market supply/borrow, HOLLAR stablecoin based on GHO), runs on top of Frontier |
 | UI | https://github.com/galacticcouncil/hydration-ui | Frontend application |
 | SDK | https://github.com/galacticcouncil/sdk | Developer SDK |
 
