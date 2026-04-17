@@ -26,7 +26,8 @@ When a skill or task needs to read code from hydration-node, hydration-ui, or sd
 
 | Skill | Path | Description |
 |-------|------|-------------|
-| `spec-writer` | `claude/skills/spec-writer/` | Feature spec writing. `--ui` for frontend, `--full` for both runtime and UI. |
+| `spec-writer` | `.claude/skills/spec-writer/` | Feature spec writing. `--ui` for frontend, `--full` for both runtime and UI. |
+| `reset-fork` | `.claude/skills/reset-fork/` | Reset a lark fork node to the latest mainnet block. Requires `swarmpit-lark` MCP. |
 
 To install a skill to a target project:
 
