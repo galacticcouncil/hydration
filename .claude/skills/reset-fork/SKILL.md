@@ -65,6 +65,8 @@ More details: https://github.com/swarmpit/mcp
 
 - **Required**: node name (`node`, `node2`, `node3`, `node4`, `node5`)
 - **Optional**: `--block-hash 0x...` — reset to a specific block instead of mainnet head
+- **Optional**: `--authorize-upgrade 0x<32-byte-hash>` — preauthorize a runtime upgrade. The fork starts with `System.AuthorizedUpgrade` set, so a single `system.applyAuthorizedUpgrade(code)` call enacts the new wasm without governance. Pass `--no-check-version` alongside to skip the spec-version check.
+- **Optional**: `--clear-authorize-upgrade` — remove a previously-injected `AUTHORIZE_UPGRADE_CODE_HASH` env var from the fork service.
 
 ## Workflow
 
@@ -122,6 +124,40 @@ for i, line in enumerate(lines):
 compose = '\n'.join(lines)
 ```
 
+#### Step 4a — (optional) inject `AUTHORIZE_UPGRADE_CODE_HASH`
+
+If the user passed `--authorize-upgrade 0x...`, add (or replace) the env var on the `fork` service. If `--clear-authorize-upgrade`, remove it. The fork's `prepare-state-for-zombienet.js` reads this env var on first start and writes the `System.AuthorizedUpgrade` storage entry into the chain spec.
+
+```python
+import re
+HASH = "0x..."  # the new code hash; or None to clear
+CHECK_VERSION = True  # False if --no-check-version
+
+# Walk the YAML and find the `environment:` block under `services: fork:`.
+# Two cases: env var already present (replace value), or absent (append).
+fork_env_re = re.compile(
+    r"(^  fork:\n(?:    .*\n)*?    environment:\n)((?:      .*\n)+)",
+    re.MULTILINE,
+)
+m = fork_env_re.search(compose)
+header, body = m.group(1), m.group(2)
+
+# strip any existing AUTHORIZE_UPGRADE_* lines
+body = re.sub(r"^      AUTHORIZE_UPGRADE_(CODE_HASH|CHECK_VERSION):.*\n", "", body, flags=re.MULTILINE)
+
+if HASH is not None:
+    body += f"      AUTHORIZE_UPGRADE_CODE_HASH: {HASH}\n"
+    if not CHECK_VERSION:
+        body += "      AUTHORIZE_UPGRADE_CHECK_VERSION: \"false\"\n"
+
+compose = compose[:m.start()] + header + body + compose[m.end():]
+```
+
+Notes:
+- The hash is the **runtime wasm blake2-256 hash** (what `authorize_upgrade` takes), not a block hash. `subkey hash` or a polkadot.js precompute works.
+- After the fork is up, the user submits `system.applyAuthorizedUpgrade(code)` with the actual wasm bytes — only then is the upgrade enacted. The skill does not handle that step.
+- The env var only takes effect on a fresh fork start (when `data/forked-chainspec.json` is regenerated). Resetting the fork via this skill always regenerates state, so changes apply on next deploy.
+
 ### Step 5 — Deploy via MCP
 
 Use `mcp__swarmpit-lark__update_stack` with the updated compose. The stack update deploys to Swarmpit which applies it via Docker Swarm.
@@ -155,3 +191,9 @@ User: "reset lark 5"
 5. Update compose, deploy via `update_stack`
 6. Verify fork task is running
 7. Save updated `lark/node5.yml`
+
+User: "reset lark 5 with preauthorized upgrade 0xabc...123"
+1. Same as above, plus:
+2. In Step 4a, add `AUTHORIZE_UPGRADE_CODE_HASH: 0xabc...123` under the `fork` service's `environment:`
+3. Show that env var line in the diff before deploying
+4. After fork is up, instruct the user that `system.applyAuthorizedUpgrade(<wasm>)` will now enact the upgrade in a single call
