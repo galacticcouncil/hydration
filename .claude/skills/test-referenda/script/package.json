@@ -1,0 +1,14 @@
+{
+  "name": "create-referenda",
+  "version": "1.0.0",
+  "description": "Create governance referenda on a Hydration lark testnet from Alice (//Alice). Notes a system.remark preimage, submits the referendum, places the decision deposit. Designed for invocations like \"claude, please create 10 referenda on lark 2\" — see index.js header.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@polkadot/api": "^14.0.0",
+    "@polkadot/util-crypto": "^13.0.0"
+  }
+}
