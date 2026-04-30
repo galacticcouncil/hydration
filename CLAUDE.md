@@ -28,6 +28,7 @@ When a skill or task needs to read code from hydration-node, hydration-ui, or sd
 |-------|------|-------------|
 | `spec-writer` | `.claude/skills/spec-writer/` | Feature spec writing. `--ui` for frontend, `--full` for both runtime and UI. |
 | `reset-fork` | `.claude/skills/reset-fork/` | Reset a lark fork node to the latest mainnet block. Requires `swarmpit-lark` MCP. |
+| `upgrade-basilisk` | `.claude/skills/upgrade-basilisk/` | Upgrade the basilisk binary on a Basilisk mainnet RPC node from the snapshots server and restart `blockchain.service`. |
 
 To install a skill to a target project:
 
