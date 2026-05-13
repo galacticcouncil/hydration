@@ -42,12 +42,22 @@ extrinsic-level state-transition proof.
 | v6    | + real Substrate storage keys (`twox128 ++ blake2_128_concat`) + 134-byte SignedPayload | 916,156 | +24,828 |
 | v7    | + read signer's `System::Account`, check nonce, deduct fee, bump nonce | 976,924 | +60,768  |
 | v8    | block of 2 sells: in-block state evolution + single pre/post-root | 1,918,371 | ~+941 k / extrinsic |
+| **v9**| **ZisK-native** sell: ECDSA + Poseidon2 SMT replace all Substrate-isms |  **51,584** | **−925 k / extrinsic (18.9× cheaper than v7)** |
+| v10   | full `hydradx-runtime` crate as native RISC-V | **structurally blocked** | — (see § 9) |
 
 The v8 guest does the full lifecycle: signature verify, call decode,
 key re-derivation, storage proof verification, state read, math,
 slippage check, fee + nonce update, write-back, post-root computation.
 Anyone with the witness and `(pre_state_root, post_state_root,
 extrinsics_hash)` can independently verify the state transition.
+
+v9 is the *other end of the spectrum* — keep only the Omnipool math
+shared with the Substrate chain, replace everything around it with
+primitives that hit ZisK syscalls (ECDSA via `k256` patched, Poseidon2
+sparse Merkle tree, content-addressed storage). v10 is the *third*
+end — try to recompile the production WASM runtime crate as native
+RISC-V. v10 fails for structural reasons, not cycle budget. § 9
+covers the three-way comparison.
 
 ---
 
@@ -60,7 +70,9 @@ the ~9.6 k cycle ZisK runtime overhead.
 | ------------------------------- | ------------: | ------------------------------------------ |
 | Runtime baseline (`bench-noop`) |         9,618 | entrypoint + alloc + commit one byte       |
 | sr25519 verify (`bench-sr25519`)|       735,591 | schnorrkel, no precompile                  |
+| **ECDSA secp256k1** (`k256` patched) | **18,200** | uses `syscall_secp256k1_add` + `_dbl`. **~40× cheaper than sr25519.** |
 | BLAKE2-256 hash, ≤ 128 B input  |   ~3,400 (+~2,800/extra block) | `blake2b_simd`, no precompile |
+| **Poseidon2 permutation** (`syscall_poseidon2`) | **~7 amortized** | syscall protocol cost only; work proven in a specialised circuit. **~400× cheaper per permutation than BLAKE2.** |
 | Keccak-256 (`tiny-keccak` patched) | ~900/block | uses `syscall_keccakf`                  |
 | Keccak-256 (`sha3` unpatched)   | ~7,100/block | pure RV64IMA — Substrate's actual path     |
 | `sp_trie::verify_trie_proof`    | ~7.5–14 k per proof node | BLAKE2-bound                  |
@@ -71,6 +83,11 @@ speedup** when the `tiny-keccak` patched fork is wired via
 `sha3` which has no equivalent patch fork; would need to be written or
 the call sites replaced.
 
+The ECDSA and Poseidon2 numbers are what enable the v9 design (§ 9).
+With both ZisK-native primitives in the proving path, per-extrinsic
+cost drops from v7's ~977 k to v9's measured **51,584 cycles** — an
+~18.9× shrinkage on the same Omnipool semantics.
+
 ---
 
 ## 3. Risk model: what flipped
@@ -79,10 +96,11 @@ the call sites replaced.
 | -------------------------------------- | --------------------------------------- |
 | **BLAKE2 dominates trie cost**         | ~13 k per typical trie-node hash; ~50× cheaper than worst-case estimate |
 | **sr25519 expensive — needs Schnorrkel patch fork** | ~735 k cycles confirmed; no patch fork exists today |
-| **secp256k1 / k256 may need patching** | Not exercised here; the Frontier EVM path wasn't part of v8 |
-| **WASM-runtime path is catastrophic**  | Confirmed — but native-Rust port works |
-| Trie verify cost handwaved              | Measured: linear in proof nodes; per-key with sharing ≈ 30–60 k cycles |
-| Per-block cost handwaved                | Per-extrinsic ≈ 941 k; per 300-tx block ≈ 282 M cycles, 0.4 % of step ceiling |
+| **secp256k1 / k256 may need patching** | k256-patched fork exists at `0xPolygonHermez/zisk-patch-elliptic-curves` and works; measured **18.2 k cycles** per ECDSA verify |
+| **WASM-runtime path is catastrophic**  | Cycle-budget worry was wrong, but path is **structurally blocked** at the `#[runtime_interface]` macro level (see § 9) |
+| Trie verify cost handwaved              | Measured: linear in proof nodes; per-key with sharing ≈ 30–60 k cycles (BLAKE2 trie); ~1 k cycles (Poseidon2 SMT) |
+| Per-block cost handwaved                | Per-extrinsic ≈ 977 k (v7) or **52 k (v9 ZisK-native)**; per 300-tx block 290 M / 15.5 M cycles respectively, both under 0.5 % of step ceiling |
+| **One option for proving Hydration**    | **Three options** with very different effort/cycle tradeoffs (§ 9) |
 
 The original note's biggest worry — that the runtime + proof verification
 + trie work would blow past the 2³⁶ step ceiling — was wrong by ~250×.
@@ -203,25 +221,146 @@ worth flagging in any roadmap planning.
 
 ## 6. Headline numbers for the feasibility decision
 
-| Cost item                              | Per extrinsic | Per 300-tx block (estimated) |
-| -------------------------------------- | ------------: | ---------------------------: |
-| sr25519 verify (75–83 % of total)      |     ~735 k    |                       ~220 M |
-| Trie reads + writes + new root         |     ~145 k    |                        ~44 M |
-| Storage key derivation                 |      ~25 k    |                       ~7.5 M |
-| Math (`calculate_sell_state_changes`)  |       ~7 k    |                         ~2 M |
-| SCALE encode/decode + asserts          |      ~55 k    |                        ~17 M |
-| ZisK runtime overhead (per-program)    |      ~10 k    |             ~10 k (one-time) |
-| **Total**                              |   **~977 k**  |                **~290 M cycles** |
+Per-extrinsic budget under each strategy:
 
-Versus the **2³⁶ ≈ 68.7 G step ceiling**: a 300-tx block uses **0.42 %**.
-Versus the **6 s Hydration block time** (AURA target): possibly
-achievable on Blackwell hardware (ZisK's reference 6.56 s for Ethereum
-implies ~0.4 s for a Hydration block on 24 × RTX 5090; ~10–30 s on a
-single RTX 5090); not achievable on CPU (~10 hours).
+| Cost item                              | v7 (Substrate-faithful) | **v9 (ZisK-native)** |
+| -------------------------------------- | ----------------------: | -------------------: |
+| Signature verify                       |   735 k (sr25519)       |  **18 k (ECDSA)**    |
+| Trie / Merkle reads + writes + new root|             ~145 k      |          **~3 k**    |
+| Storage key derivation                 |              ~25 k      |          **~0.1 k**  |
+| Math (`calculate_sell_state_changes`)  |               ~7 k      |              ~7 k    |
+| SCALE encode/decode + asserts          |              ~55 k      |             ~13 k    |
+| ZisK runtime overhead                  |              ~10 k      |             ~10 k    |
+| **Total**                              | **~977 k (measured)**   | **~52 k (measured)** |
+
+Per 300-tx block: 290 M cycles (v7) vs 15.5 M cycles (v9). Versus the
+**2³⁶ ≈ 68.7 G step ceiling**: 0.42 % (v7) or 0.023 % (v9).
+
+Versus the **6 s Hydration block time** (AURA target):
+
+| Hardware                                      | v7 estimate | v9 estimate |
+| --------------------------------------------- | ----------: | ----------: |
+| This CPU (~8.1 k cycles/s, measured)          | ~10 h       | ~32 min     |
+| Single RTX 5090 (~30 M cycles/s, scaled)      | ~9 s        | **~0.5 s**  |
+| Hypothetical rebuilt sm_86 binary on RTX 3090 | ~20 s       | **~1 s**    |
+| 24 × RTX 5090 (ZisK's reference)              | ~0.4 s      | **~21 ms**  |
+
+The v9 design moves "realtime Hydration block proving" from a Blackwell-
+only target to single-consumer-GPU territory.
 
 ---
 
-## 7. What's *not* in the PoC
+## 7. The three design choices (and what each costs)
+
+After v9 and v10, the spectrum of "Hydration on ZisK" looks like this:
+
+| | **v7-style** (Substrate-faithful manual STF) | **v9-style** (ZisK-native rollup) | **v10-style** (recompile WASM runtime) |
+| ---: | --- | --- | --- |
+| Per-extrinsic cycles | ~977 k | **~52 k** | would be > v7 |
+| Signature | sr25519 (no syscall) | ECDSA secp256k1 (k256 patched) | sr25519 (same as Substrate) |
+| State hashing | BLAKE2 MPT (no full-hash syscall) | Poseidon2 SMT (syscall) | BLAKE2 MPT |
+| Storage keys | `twox128 ++ twox128 ++ blake2_128_concat` | `Poseidon2(asset_id)` flat | full Substrate prefixes |
+| Substrate ecosystem compatibility | full | none | full |
+| Polkadot relay-chain settlement | yes | no | yes |
+| Hardware needed for realtime block proving | Blackwell only | **single consumer GPU** | Blackwell only |
+| Engineering status | **measured at v8** (1 extrinsic, single signer) | **measured at v9** (1 extrinsic, simplified SMT) | **structurally blocked** at compile time |
+| Production effort estimate | ~6–12 PMs to cover all relevant pallets + EVM | ~3–6 PMs for the rollup design, multi-pallet, sequencer | minimum 2–4 weeks to compile, 2–4 weeks to execute, then re-do v7 work on top |
+
+The math is portable between v7 and v9 — the `hydra-dx-math` crate is
+identical in both paths, so Omnipool's economic invariants are
+preserved either way. What differs is the wrapper layer (signatures,
+state model, key derivation, fee mechanics).
+
+**v10 is not a faster shortcut to v7**, even though intuitively
+"recompile the WASM runtime" sounds simpler than "reimplement the
+STF". It blocks at Substrate's `#[runtime_interface]` macro, which
+emits target-specific code that doesn't understand ZisK; fixing it
+requires forking `sp-runtime-interface` and porting every
+`#[runtime_interface]` use site (~30+ across the dependency tree).
+Once that's done you still have to provide native implementations of
+every sp-io host function — i.e. the work of v7, plus the work of
+making it compatible with Substrate's runtime ABI. § 9 has the
+details.
+
+The honest recommendation for production roadmap:
+
+- **If the goal is "Hydration with ZK-proofs while staying a Polkadot
+  parachain":** pursue **v7-style** — keep extending the manual STF
+  approach to cover more pallets. The ~6 s block-time on Blackwell is
+  the operational constraint.
+- **If the goal is "the cheapest possible ZK-proofs of Omnipool
+  semantics":** pursue **v9-style** as a sidecar / L2-style rollup
+  that doesn't try to be Polkadot-compatible. Realtime on consumer
+  GPUs is the operational win.
+- **The "recompile the WASM runtime" path is not viable** without
+  upstream changes to Substrate or a willingness to maintain a
+  ZisK-specific Substrate fork indefinitely.
+
+---
+
+## 8. v10 deep-dive: why "just recompile the WASM runtime" doesn't work
+
+I attempted to compile `hydradx-runtime` directly for
+`riscv64ima-zisk-zkvm-elf` to complete the spectrum of design choices.
+
+**Got past one expected wall.** Installing `riscv64-elf-gcc` and
+`riscv64-elf-newlib` from Arch repos, then setting
+`CC_riscv64ima_zisk_zkvm_elf=riscv64-elf-gcc`, let `secp256k1-sys` and
+other C-FFI build scripts cross-compile successfully. After that, ~100
+Rust crates built clean for the riscv64 target — including sp-core,
+schnorrkel, the patched k256, and many pallets.
+
+**Hit a deeper wall.** Substrate's `#[runtime_interface]` proc-macro
+emits *different code* depending on the target:
+
+| Target | Generated code |
+| --- | --- |
+| `target = "wasm32-*"` | `extern "C"` import stubs (the runtime calls into the client) |
+| native (`x86_64-*-linux` etc.) | host-side functions with `ExternalitiesExt` |
+| `riscv64ima-zisk-zkvm-elf` | falls through to the native variant, references `Vec` and `ExternalitiesExt` that aren't in scope → **compile failure** |
+
+First crate that fails: `cumulus-primitives-proof-size-hostfunction`:
+
+```
+error[E0282]: type annotations needed
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> cumulus/primitives/proof-size-hostfunction/src/lib.rs:35
+   = note: this error originates in the attribute macro `runtime_interface`
+```
+
+About 30+ other crates in the runtime's dependency tree use
+`#[runtime_interface]` similarly. Each would need either the macro to
+recognise the ZisK target, or a manual workaround per call site.
+
+**What it would take to fix:**
+
+1. Fork `sp-runtime-interface` to treat the ZisK target as
+   WASM-equivalent (emit import stubs rather than host code), or as a
+   *third* class with its own codegen.
+2. Provide native Rust implementations of every sp-io host function
+   for the ZisK side — exactly the work v4–v8 did manually, but for
+   the entire sp-io ABI rather than the subset Omnipool::sell needs.
+3. Build a driver crate that loads the runtime, sets up an
+   externalities backend backed by the storage-proof MemoryDB, and
+   calls `Core::execute_block`.
+4. Resolve remaining target-specific `cfg` blocks across the
+   dependency tree (many have explicit `wasm32` / `not(wasm32)` splits
+   that don't account for a third target).
+
+Optimistic estimate: 2–4 weeks of focused fork-and-patch work to get a
+clean build, plus another 2–4 weeks for actual single-extrinsic
+execution. The end result would have *worse* cycle counts than v7
+(more pallet dispatch indirection, full XCM/EVM stack pulled in even
+if unused). So this path is strictly dominated by v7-style work for
+the same outcome.
+
+**Operational takeaway.** The "recompile the runtime as RISC-V"
+shortcut isn't a shortcut. Production ZisK proving for Hydration is a
+v7 or v9 conversation, not a v10 one.
+
+---
+
+## 9. What's *not* in the PoC
 
 Honest about coverage:
 
@@ -249,21 +388,22 @@ Honest about coverage:
   verifier (`zisk-contracts/PlonkVerifier.sol`); deploying it against
   Hydration's EVM layer would be a separate exercise.
 
-Each of these is a tractable v9+ task. None of them change the headline
-budget analysis materially — they add more cycles to the per-extrinsic
-budget but stay well within the 2³⁶ ceiling.
+Each of these is a tractable next task. None of them change the
+headline budget analysis materially — they add more cycles to the
+per-extrinsic budget but stay well within the 2³⁶ ceiling.
 
 ---
 
-## 8. Updated recommendation
+## 10. Updated recommendation
 
 The original note recommended Option C (prove one extrinsic's STF
-standalone) as the realistic PoC. **Option C is done.** The PoC has also
+standalone) as the realistic PoC. **Option C is done.** The PoC also
 extended into Option B territory (block-level proof with real signature
-verification + trie + state evolution), which the original note called
-"6–12 person-months". The actual time was 2 sessions of focused work to
-get to v8, leveraging that the Substrate Rust stack compiles cleanly
-under ZisK's Rust fork once a few workspace traps are avoided.
+verification + trie + state evolution), and into a fourth option the
+original note didn't envisage — **Option D: a ZisK-native redesign**
+(v9) that's not a Hydration runtime at all but reuses the
+`hydra-dx-math` crate. And we hit Option E (recompile the WASM
+runtime, v10) and found it structurally blocked.
 
 For a production roadmap the next priorities are:
 
@@ -284,9 +424,17 @@ For a production roadmap the next priorities are:
    chain head proving.
 5. **Public-output design.** Plan around the 256-byte cap from day one —
    commit Merkle roots over per-tx results, not inline data.
+6. **Pick a path before scaling up.** v7-style and v9-style are both
+   tractable but produce different products (Polkadot-compatible
+   parachain with ZK proofs vs. ZisK-native Omnipool rollup). The
+   choice affects everything from sequencer architecture to wallet
+   integration to liquidity bridging. The PoC gives the numbers to
+   make that decision with data; the decision itself is a
+   product/governance call, not a technical one.
 
 The original feasibility note's bottom-line — "6–12 months to a working
-block-level proof" — held for the core engineering. What's added by the
-PoC is **concrete numbers** to replace the order-of-magnitude estimates,
-and a working reference implementation that the production effort can
-fork.
+block-level proof" — held for the v7-style path. The PoC adds two
+things to it: **concrete numbers** to replace the order-of-magnitude
+estimates, and a **second viable path** (v9-style) that's ~18× cheaper
+per extrinsic at the cost of giving up Substrate ecosystem
+compatibility. The decision between them is the next conversation.
