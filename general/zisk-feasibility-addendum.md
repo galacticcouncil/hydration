@@ -217,6 +217,94 @@ deployment today requires either (a) Blackwell-class data-center GPUs
 of the GPU prover. Both are real procurement / engineering constraints
 worth flagging in any roadmap planning.
 
+### Real Hydration block end-to-end
+
+A `chain-replay` guest consumes a witness built from a real Hydration
+mainnet block. The host (`from-chain` subcommand) queries
+`chain_getBlock` + `state_getReadProof` over JSON-RPC at the chain's
+public RPC (`https://rpc.hydradx.cloud`), parses the signed extrinsic,
+derives the storage keys for the assets it touches, and packs the
+chain's compact storage proof + the actual values into a
+`ChainSellWitness`. The guest verifies the proof against the chain's
+*real* state root, decodes the values, runs `Omnipool::sell` math, and
+commits `(block_number, state_root, signer, asset_ids, amounts)` as
+the public statement.
+
+Tested against block 12,389,503 (tx 2), an `Omnipool::sell` of asset
+1000753 → 1000771:
+
+| Metric                              | Value                          |
+| ----------------------------------- | -----------------------------: |
+| State root verified                 | `0x27038294…4e5d48a6`          |
+| Storage proof from chain            | 18 nodes / 4,237 bytes         |
+| ZisK emulation steps                | 214,265                        |
+| **CPU prove time**                  | **228.4 s**                    |
+| Proof file size                     | 335,932 bytes (STARK)          |
+| Verify time                         | 173 ms                         |
+
+The proof binds `(chain state at block 12,389,503, math inputs) →
+(computed amount_out)`. Signature verification is deliberately
+omitted: reconstructing the exact bytes the chain signed requires the
+full `SignedExtra` chain (CheckNonce, CheckMortality,
+ChargeTransactionPayment, CheckMetadataHash, …); that's a tractable
+extension but wasn't needed to validate the storage-proof flow.
+
+**What this proves:**
+- ZisK guests can consume `state_getReadProof` output unchanged. No
+  chain-side support is needed beyond standard Substrate RPC. The
+  ergonomics of "fork a real chain block and prove its state
+  transition" are good.
+- The `sp_trie::verify_trie_proof` path (used in v4 and reused here)
+  works correctly against production state without the recorder dance
+  that v5+ needed for writes.
+
+### CPU prove time has a fixed ~200 s floor
+
+Comparing the v8 synthetic block (1.92 M cycles, prove = 236 s) with
+the chain-replay (214 k cycles, prove = 228 s): **9× fewer cycles
+proves in essentially the same wall-clock time**. The phase breakdown
+shows the difference is tiny inside `GENERATING_INNER_PROOFS` (195 s
+v8 vs 188 s chain-replay).
+
+ZisK's STARK prover pads each component's trace to a minimum size; for
+small workloads almost all the trace cells are padding. The CPU prove
+cost is dominated by the fixed table sizes and the BLAKE2-Merkle work
+on those tables, not by the actual RISC-V execution length.
+
+**Practical implication for CPU proving:**
+- The minimum cost of proving anything is ~200–230 s on this 16-core
+  box. Smaller proofs don't get proportionally faster.
+- For CPU-served block proving, the per-block cost is roughly constant
+  up to ~2 M cycles per block. Beyond that it grows linearly.
+- v9-style (52 k cycles) and v7-style (977 k cycles) per-extrinsic
+  budgets *both* fit comfortably under the floor for single
+  extrinsics — but a batched block of many extrinsics tips into the
+  cycle-bound regime, where v9 wins by ~18×.
+
+### GPU prove time would scale linearly
+
+On Blackwell-class GPUs the picture is reversed. GPU traces don't
+suffer from the same padding penalty — the proving cost scales close
+to linearly with actual cycle count. ZisK's published "6.56 s avg /
+Ethereum block on 24 × RTX 5090" (Aligned Layer blog) implies roughly
+~720 M cycles/s aggregate throughput across the rig.
+
+Translating to our measurements:
+
+| Workload                                | Cycles    | Est. 24×5090 prove time | Est. single 5090 |
+| --------------------------------------- | --------: | ----------------------: | ---------------: |
+| v9 native sell (single tx)              |   52 k    |              ~70 µs     |        ~1.7 ms   |
+| chain-replay (single real tx, no sig)   |  214 k    |             ~300 µs     |        ~7 ms     |
+| v7 (single tx, sr25519 + BLAKE2)        |  977 k    |             ~1.4 ms     |       ~33 ms     |
+| v8 (2-tx synthetic block)               |  1.92 M   |             ~2.7 ms     |       ~64 ms     |
+| 300-tx Hydration block, v7-style        |  ~290 M   |              ~0.4 s     |       ~10 s      |
+| 300-tx Hydration block, v9-style        |  ~16 M    |             ~22 ms      |       ~0.5 s     |
+
+On GPU, the ~18× cycle savings of v9 *do* translate directly to ~18×
+faster proving. This is the real argument for the v9 design: not the
+absolute number on CPU (where the floor dominates), but the
+GPU-budget headroom it buys, especially for busy blocks.
+
 ---
 
 ## 6. Headline numbers for the feasibility decision
