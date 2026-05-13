@@ -1,5 +1,15 @@
 # Feasibility note: running Hydration inside ZisK
 
+> **Note (May 2026):** A working PoC has been built since this note was
+> written, and several of the order-of-magnitude estimates below have
+> been replaced with measured numbers. See
+> [zisk-feasibility-addendum.md](./zisk-feasibility-addendum.md) for the
+> updated cycle counts, real proving-time measurements, and risk-model
+> updates. Key flips: BLAKE2 is ~50× cheaper than feared, sr25519 is
+> confirmed as the dominant cost, and a block-level proof works
+> end-to-end at ~941 k cycles per extrinsic. Reference implementation:
+> [hydration-zisk-poc](../../hydration-zisk-poc/).
+
 **TL;DR.** Running the full Hydration runtime under ZisK end-to-end is not feasible today as a drop-in. The fundamental mismatch is not RISC-V vs. anything — it's that Hydration is a *WASM-hosted* Substrate runtime whose hot path leans on host functions ZisK doesn't accelerate (sr25519 verify, BLAKE2, twox, trie root, EVM execution). A meaningful PoC is feasible at the granularity of *one extrinsic's state transition function*, not a block. ZisK itself is alpha (v0.17, unaudited, single-host-OS), so any production target is at least 12+ months out independent of Hydration work.
 
 ## 1. The architectural mismatch
