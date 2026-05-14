@@ -43,7 +43,7 @@ extrinsic-level state-transition proof.
 | v7    | + read signer's `System::Account`, check nonce, deduct fee, bump nonce | 976,924 | +60,768  |
 | v8    | block of 2 sells: in-block state evolution + single pre/post-root | 1,918,371 | ~+941 k / extrinsic |
 | **v9**| **ZisK-native** sell: ECDSA + Poseidon2 SMT replace all Substrate-isms |  **51,584** | **−925 k / extrinsic (18.9× cheaper than v7)** |
-| v10   | full `hydradx-runtime` crate as native RISC-V | **structurally blocked** | — (see § 9) |
+| v10   | full `hydradx-runtime` crate as native RISC-V | **structurally blocked** | — (see § 8) |
 
 The v8 guest does the full lifecycle: signature verify, call decode,
 key re-derivation, storage proof verification, state read, math,
@@ -56,7 +56,7 @@ shared with the Substrate chain, replace everything around it with
 primitives that hit ZisK syscalls (ECDSA via `k256` patched, Poseidon2
 sparse Merkle tree, content-addressed storage). v10 is the *third*
 end — try to recompile the production WASM runtime crate as native
-RISC-V. v10 fails for structural reasons, not cycle budget. § 9
+RISC-V. v10 fails for structural reasons, not cycle budget. § 7
 covers the three-way comparison.
 
 ---
@@ -83,7 +83,7 @@ speedup** when the `tiny-keccak` patched fork is wired via
 `sha3` which has no equivalent patch fork; would need to be written or
 the call sites replaced.
 
-The ECDSA and Poseidon2 numbers are what enable the v9 design (§ 9).
+The ECDSA and Poseidon2 numbers are what enable the v9 design (§ 7).
 With both ZisK-native primitives in the proving path, per-extrinsic
 cost drops from v7's ~977 k to v9's measured **51,584 cycles** — an
 ~18.9× shrinkage on the same Omnipool semantics.
@@ -97,10 +97,10 @@ cost drops from v7's ~977 k to v9's measured **51,584 cycles** — an
 | **BLAKE2 dominates trie cost**         | ~13 k per typical trie-node hash; ~50× cheaper than worst-case estimate |
 | **sr25519 expensive — needs Schnorrkel patch fork** | ~735 k cycles confirmed; no patch fork exists today |
 | **secp256k1 / k256 may need patching** | k256-patched fork exists at `0xPolygonHermez/zisk-patch-elliptic-curves` and works; measured **18.2 k cycles** per ECDSA verify |
-| **WASM-runtime path is catastrophic**  | Cycle-budget worry was wrong, but path is **structurally blocked** at the `#[runtime_interface]` macro level (see § 9) |
+| **WASM-runtime path is catastrophic**  | Cycle-budget worry was wrong, but path is **structurally blocked** at the `#[runtime_interface]` macro level (see § 8) |
 | Trie verify cost handwaved              | Measured: linear in proof nodes; per-key with sharing ≈ 30–60 k cycles (BLAKE2 trie); ~1 k cycles (Poseidon2 SMT) |
 | Per-block cost handwaved                | Per-extrinsic ≈ 977 k (v7) or **52 k (v9 ZisK-native)**; per 300-tx block 290 M / 15.5 M cycles respectively, both under 0.5 % of step ceiling |
-| **One option for proving Hydration**    | **Three options** with very different effort/cycle tradeoffs (§ 9) |
+| **One option for proving Hydration**    | **Three options** with very different effort/cycle tradeoffs (§ 7) |
 
 The original note's biggest worry — that the runtime + proof verification
 + trie work would blow past the 2³⁶ step ceiling — was wrong by ~250×.
@@ -403,7 +403,7 @@ requires forking `sp-runtime-interface` and porting every
 `#[runtime_interface]` use site (~30+ across the dependency tree).
 Once that's done you still have to provide native implementations of
 every sp-io host function — i.e. the work of v7, plus the work of
-making it compatible with Substrate's runtime ABI. § 9 has the
+making it compatible with Substrate's runtime ABI. § 8 has the
 details.
 
 The honest recommendation for production roadmap:
@@ -419,6 +419,95 @@ The honest recommendation for production roadmap:
 - **The "recompile the WASM runtime" path is not viable** without
   upstream changes to Substrate or a willingness to maintain a
   ZisK-specific Substrate fork indefinitely.
+
+### What ZK proving would actually replace in Hydration's stack
+
+The "ZisK instead of Polkadot validators" framing needs unpacking,
+because Hydration's validator model is not what a standalone-L1 ZK
+rollup proposal would target. From the Hydration wiki
+([`hydration-runtime.md`](../../hydrated-garden/src/site/notes/wiki/hydration-runtime.md),
+[`polkadot.md`](../../hydrated-garden/src/site/notes/wiki/polkadot.md),
+[`pallet-relaychain-info.md`](../../hydrated-garden/src/site/notes/wiki/pallet-relaychain-info.md)):
+
+- **Hydration runs AURA inside Cumulus.** Collators (selected via
+  `pallet_collator_selection`, index 21) produce parablocks; consensus
+  is slot-based AURA over `pallet_aura` + `pallet_aura_ext`. Block
+  target is 6 s.
+- **Polkadot validators don't re-execute Hydration blocks locally**.
+  Hydration "inherits shared security from the relay chain": Polkadot
+  validators attest to collator-produced parablocks via the
+  relay-chain consensus mechanism, but they do not maintain
+  independent Hydration state. Every Hydration block records the
+  *relay parent* (`pallet-relaychain-info.md`: "the relay parent —
+  not the latest finalized relay block, but the one this parablock was
+  built against") and gets backed via cumulus to the relay-chain
+  candidate-backing flow.
+- **Spec version is currently 411.** Runtime upgrades go through
+  OpenGov, which is "tiered across 9 tracks with varying approval
+  thresholds. Because runtime upgrades are Root-level governance
+  decisions, they follow the most stringent track" — i.e. infrequent
+  but unpredictable. Any ZK-proof-of-runtime work is tied to a
+  spec_version and re-validation work is needed at each upgrade.
+
+So the three design choices replace different things:
+
+| Path | Replaces (what ZK provides) | Preserves | Loses |
+| --- | --- | --- | --- |
+| **v7-style** | Off-chain auditability of state transitions for the covered pallets. Light clients can verify without trusting RPC. Validators *still* attest as today. | Full Polkadot parachain status: XCM, AssetHub interop, relay-chain shared security, OpenGov, HDX staking yields. | Just engineering cost — every pallet not covered remains "trusted via parachain consensus only". |
+| **v9-style** | The full security model. ZK soundness + a settlement-chain bridge replace Polkadot validator stake. | Omnipool *math* semantics (same `hydra-dx-math`). | XCM to other parachains, AssetHub-routed assets (vDOT, USDT, USDC, wBTC via parachains), Snowbridge / Wormhole bridges, HDX-as-parachain-gas, OpenGov of the parachain itself. Hydration would re-anchor governance on the new settlement layer. |
+| **v10-style** | Nothing more than v7-style would; only changes *how* the proof is generated. | Same as v7 conceptually. | Structurally blocked at the `#[runtime_interface]` macro level — see § 8. |
+
+The crucial detail from the wiki for the "instead of validators"
+question: **Polkadot validators don't currently re-execute Hydration
+blocks**. Replacing their attestation with ZK proofs is a deeper
+shift than "swap one validity check for another" — it's "leave the
+Polkadot consensus + economic security model entirely and rebuild on
+ZK + a bridge". The v7-style path keeps the existing parachain
+consensus as the security anchor and adds ZK as additional verifiable
+artifact; the v9-style path is the genuine "instead of" answer and
+loses everything the wiki documents about XCM, AssetHub, Snowbridge
+and OpenGov integration.
+
+### Ecosystem dependencies that v9-style breaks
+
+Cross-referencing the wiki:
+
+- **XCM and AssetHub** (`xcm.md`): Hydration uses XCM for assets
+  including vDOT (Bifrost), USDT/USDC (AssetHub), wrapped BTC, plus
+  "remote swaps — composing XCM instructions so users swap and
+  receive assets on a different chain in one UX flow". A ZisK-native
+  rollup outside the parachain set cannot participate.
+- **Snowbridge / Wormhole** — external bridge dependencies that
+  inherit Polkadot's validator-set security. Leaving the parachain
+  network exits these trust models too.
+- **HDX tokenomics** (`hdx.md`): "Protocol fees from the omnipool
+  are collected in LRNA and used for continuous HDX buybacks, which
+  are distributed to stakers." A v9 rollup would need to replicate
+  this buyback + distribution mechanism on the settlement chain or
+  accept changed staker yields.
+- **Fee-in-any-asset model**
+  (`dynamic-fees.md`, `pallet-transaction-multi-payment`): Hydration
+  lets users pay tx fees "in any Omnipool asset — not just HDX". Both
+  v7 and v9 proofs need to model this rather than assume a single gas
+  token; the PoC's flat-HDX fee is a placeholder, not a faithful
+  model.
+
+### Audit pedigree the PoC adds to, not replaces
+
+Three external audits cover the existing Hydration codebase: **Runtime
+Verification (Sept 2022)** on the omnipool Rust implementation,
+**BlockScience (Mar 2022)** on the AMM mathematical model + LP
+economics, **Code4rena (Feb 2024)** competitive audit of the full
+node (omnipool, stableswap, oracles, pallets). **Immunefi** runs the
+active bug bounty
+(`immunefi.md`, `runtime-verification.md`, `blockscience.md`,
+`code4rena.md`). The math layer that both v7 and v9 paths reuse is
+the *same* `hydra-dx-math` crate these auditors have already covered;
+the additional surface a ZK deployment introduces is the proof
+system itself (Plonky3 + PIL2 + BN254 PLONK wrap) plus the witness-
+generation pipeline. Production deployment should plan for an audit of
+this new layer, additive to the existing Hydration audit pedigree
+rather than replacing it.
 
 ---
 
@@ -497,20 +586,46 @@ Honest about coverage:
 - **No `pallet-transaction-payment` integration.** Fees are a flat
   `1_000_000_000_000` constant in the witness, not computed from weight
   × fee multiplier × length + tip.
-- **No oracle reads.** Omnipool dynamic fees are stubbed as fixed PPMs.
-- **No Frontier / EVM path.** Hydration's AAVE v3 + HOLLAR stack is EVM-
-  inside-Substrate. Proving an EVM call would need the `evm` crate
-  inside the guest and presumably much higher cycle counts. Not
-  attempted.
+- **No oracle reads.** Omnipool dynamic fees are stubbed as fixed
+  PPMs. In production, `pallet-dynamic-fees` (runtime index 68)
+  adjusts per-asset fees each block using `pallet-ema-oracle` history:
+  per the wiki (`pallet-dynamic-fees.md`, `ema-oracle.md`), the
+  computation is "amplification (based on volume ratio) minus decay,
+  clamped to `[min_fee, max_fee]`", using time-weighted average prices
+  over a configurable window. A real fee proof needs additional
+  storage reads for the EMA state + recent oracle entries.
+- **No `pallet-transaction-multi-payment` modelling.** The PoC
+  assumes fees in HDX; in reality Hydration lets users pay
+  transaction fees "in any Omnipool asset — not just HDX"
+  (`dynamic-fees.md`). The witness needs to model the fee-asset
+  conversion.
+- **No Frontier / EVM path.** Hydration's AAVE v3 + HOLLAR stack is
+  EVM-inside-Substrate. Proving an EVM call would need the `evm`
+  crate inside the guest. Two compounding factors from the wiki:
+  - `pallet-frontier` "embeds an EVM execution environment directly
+    in the Hydration runtime" (`pallet-frontier.md`).
+  - `pallet-dynamic-evm-fee` (index 94) "computes EVM
+    BaseFeePerGas dynamically from the Substrate extrinsic length
+    multiplier so EVM and non-EVM transactions pay comparable fees
+    under congestion" (`pallet-dynamic-evm-fee.md`) — so EVM gas
+    pricing is stateful and Substrate-coupled.
+  - HOLLAR liquidations run as EVM contracts and execute "at the
+    start of each block" (`hollar.md`) — proving a clean block would
+    need to cover these too.
 - **No `TransactionExtension` chain modelled individually.** v6's
-  `SignedPayloadV6` lumps everything into one struct.
-- **STARK proof only, no PLONK wrap.** On-chain EVM verification would
-  need `cargo-zisk wrap-proof` + the PLONK proving key (separate ~2 GB
-  download via `ziskup setup_snark`). Skipped — STARK proof is enough
-  to validate the cycle counts.
-- **No actual on-chain verifier integration.** ZisK ships a Solidity
-  verifier (`zisk-contracts/PlonkVerifier.sol`); deploying it against
-  Hydration's EVM layer would be a separate exercise.
+  `SignedPayloadV6` lumps the SignedExtra components (CheckMortality,
+  CheckNonce, ChargeTransactionPayment, CheckMetadataHash etc.) into
+  one struct. The full chain in production runtime 411 is:
+  `cumulus_pallet_weight_reclaim::StorageWeightReclaim<Runtime,
+  InnerSignedExtra>` (`hydration-runtime.md`).
+- **On-chain verifier integration is partial.** ZisK's
+  `PlonkVerifier.sol` builds and deploys cleanly via foundry/anvil
+  (10,955-byte bytecode); `cargo-zisk wrap-proof --plonk` produces a
+  2,994-byte file containing a 768-byte abi-encoded `uint256[24]`
+  PLONK proof + 256-byte padded public values. The end-to-end
+  `verifySnarkProof` call reverts with `InvalidProof()` pending a
+  byte-format discovery for `programVK` + `rootCVadcopFinal`; see
+  `hydration-zisk-poc/onchain/README.md`.
 
 Each of these is a tractable next task. None of them change the
 headline budget analysis materially — they add more cycles to the
