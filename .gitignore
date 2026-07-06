@@ -1,1 +1,4 @@
 .idea/
+specs/
+.mcp.json
+node_modules/
