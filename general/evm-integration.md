@@ -16,19 +16,20 @@ Hydration's EVM compatibility is provided by `pallet_evm` + `pallet_ethereum` �
 
 ## 2. Networks & RPC
 
-**Mainnet** — EVM chain ID `222222` (`0x3640e`). All endpoints below serve both Substrate WSS and Ethereum JSON-RPC (`eth_*`) on the same host — there is no separate EVM-only endpoint:
+**Mainnet** — EVM chain ID `222222` (`0x3640e`). All endpoints below serve both Substrate WSS and Ethereum JSON-RPC (`eth_*`) on the same host — there is no separate EVM-only endpoint. This list matches `hydration-ui`'s `production` branch config and was live-verified (`eth_chainId`) at time of writing:
 
 | Provider | Endpoint |
 |---|---|
 | Dwellir (default) | `wss://hydration-rpc.n.dwellir.com` |
-| Dotters | `wss://hydration.dotters.network` |
-| IBP | `wss://hydration.ibp.network` |
-| LATAM (stkd) | `wss://hydration.rpc.stkd.io` |
-| zipp | `wss://rpc.zipp.hydration.cloud` |
-| roach | `wss://rpc.roach.hydration.cloud` |
-| lait | `wss://rpc.lait.hydration.cloud` |
-| sin | `wss://rpc.sin.hydration.cloud` |
-| coke | `wss://rpc.coke.hydration.cloud` |
+| Rotko (SEA) | `wss://hydration.rotko.net` |
+| sin | `wss://subway.sin.hydration.cloud` |
+| coke | `wss://subway.coke.hydration.cloud` |
+| kril | `wss://rpc.kril.hydration.cloud` |
+| shellfish | `wss://subway.shellfish.hydration.cloud` |
+| catfish-1 | `wss://rpc-catfish-1.catfish.hydration.cloud` |
+| catfish-2 | `wss://rpc-catfish-2.catfish.hydration.cloud` |
+| catfish-3 | `wss://rpc-catfish-3.catfish.hydration.cloud` |
+| catfish-4 | `wss://rpc-catfish-4.catfish.hydration.cloud` |
 
 For `eth_*` JSON-RPC, use the same hostnames over `https://` (e.g. `https://hydration-rpc.n.dwellir.com`).
 
@@ -88,36 +89,23 @@ Standard Hardhat/Foundry deployment flows work against the mainnet RPC endpoints
 
 ## 6. Contract verification
 
-There is currently **no supported source-verification explorer** for Hydration's EVM (no Blockscout/Etherscan-equivalent workflow). Subscan provides basic transaction/block lookup for Hydration but does not offer contract source verification.
+Hydration's block explorer is [hydration.subscan.io](https://hydration.subscan.io). It provides transaction/block lookup across both the Substrate and EVM sides of the chain, but does not offer Blockscout/Etherscan-style contract source verification.
 
 If you need verified-source publication for your contracts, contact the Hydration team directly — this is a known gap rather than a self-serve flow today.
 
 ## 7. Local mainnet-fork testing with Chopsticks
 
-For local development against a fork of Hydration mainnet state, use the **`@galacticcouncil/chopsticks`** fork — not vanilla `@acala-network/chopsticks`, which lacks Frontier `eth_*` RPC support.
-
-Simplest path (prebuilt image, includes EVM support):
+For local development against a fork of Hydration mainnet state, use the **`@galacticcouncil/chopsticks`** fork — not vanilla `@acala-network/chopsticks`, which lacks Frontier `eth_*` RPC support. (Note: `galacticcouncil/fork` is a separate, zombienet-based tool used to run Hydration's own "lark" testnet instances — it is not Chopsticks and isn't the right tool for local single-node fork testing.)
 
 ```bash
-docker run -d -p 8000:9988 galacticcouncil/fork
+npx @galacticcouncil/chopsticks@latest --config=hydradx
 ```
 
-This serves both Substrate and `eth_*` JSON-RPC on `http://localhost:8000` / `ws://localhost:8000`, forked from current Hydration mainnet state.
+This serves both Substrate and `eth_*` JSON-RPC on the same port (default `ws://localhost:8000`), forked from current Hydration mainnet state. Instant block production is the default build-block mode.
 
 **Gotchas:**
-- `--build-block-mode Instant` doesn't take effect at startup — after boot, call `dev_setBlockBuildMode(["Instant"])` via RPC (pass the mode as a string, not an integer).
 - `eth_feeHistory` and `eth_maxPriorityFeePerGas` are synthetic, derived from a static `eth_gasPrice` under a fork — don't rely on fee-history-based gas estimation in this environment.
 - Legacy (type-0) transactions only, same as mainnet.
-
-## 8. Wormhole integration notes
-
-Hydration does not currently host a native Wormhole Core Bridge / Token Bridge deployment on its own EVM. Wormhole connectivity to Hydration today works transitively via **MRL (Moonbeam Routed Liquidity)**: Wormhole's Token Bridge is deployed on Moonbeam, and transfers destined for Hydration carry an XCM payload that Moonbeam forwards on arrival.
-
-For a team evaluating a direct Wormhole deployment on Hydration's own EVM, the relevant facts from this doc apply directly:
-
-- **Chain ID** `222222` and the **Osaka** EVM target (§1, §4) are stable and already support everything a modern Wormhole contract set would compile to.
-- **Deployer whitelisting** (§5) applies the same way to any integrator — a CREATE2-factory deploy pattern would go through the same governance-gated allowlist process as any other deployer.
-- **Finality**: Hydration is a Polkadot parachain — finality is inherited entirely from the Polkadot relay chain, not produced by a per-parachain gadget. Guardian-network designs that assume simple L1-style block-confirmation depth should treat this as a topic for a direct technical conversation with the Hydration team rather than assume standard heuristics apply.
 
 ## Sources
 
