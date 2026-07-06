@@ -40,3 +40,4 @@ Available for direct fetch from `https://raw.githubusercontent.com/galacticcounc
 
 - `hydration.md` — protocol overview (products, architecture, governance, tokenomics)
 - `omnipool.md` — Omnipool deep dive (mechanics, math, risk model)
+- `evm-integration.md` — EVM integration guide for third parties (RPC endpoints, precompiles, deployer whitelisting, contract verification)

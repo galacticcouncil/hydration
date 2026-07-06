@@ -121,8 +121,9 @@ The Hydration Treasury is one of the most diversified on-chain treasuries in the
 - Intents abstract routing complexity — users express a desired outcome, the protocol finds the optimal path across chains
 
 ### EVM Compatibility
-- EVM compatibility is achieved via **pallet-evm / pallet-frontier** — a Substrate pallet that embeds an EVM execution environment directly in the runtime
+- EVM compatibility is achieved via **`pallet_evm` + `pallet_ethereum`** (Moonbeam-maintained Frontier fork) — embeds an EVM execution environment directly in the runtime
 - Enables Solidity-based tooling and EVM wallets (e.g., MetaMask) to interact with Hydration without a separate EVM chain
+- See `evm-integration.md` for RPC endpoints, precompiles, deployer whitelisting, and verification details
 
 ---
 
