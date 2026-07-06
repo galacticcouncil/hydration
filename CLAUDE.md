@@ -51,5 +51,6 @@ Protocol context documents available for WebFetch from other repos:
 |----------|---------|
 | Protocol overview (products, architecture, governance, tokenomics) | `https://raw.githubusercontent.com/galacticcouncil/hydration/main/general/hydration.md` |
 | Omnipool deep dive (mechanics, math, risk model) | `https://raw.githubusercontent.com/galacticcouncil/hydration/main/general/omnipool.md` |
+| EVM integration guide (RPC, precompiles, deployer whitelisting, verification, Wormhole notes) | `https://raw.githubusercontent.com/galacticcouncil/hydration/main/general/evm-integration.md` |
 
 Fetch whichever documents are relevant to the task at hand.
