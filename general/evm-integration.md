@@ -107,6 +107,28 @@ This serves both Substrate and `eth_*` JSON-RPC on the same port (default `ws://
 - `eth_feeHistory` and `eth_maxPriorityFeePerGas` are synthetic, derived from a static `eth_gasPrice` under a fork — don't rely on fee-history-based gas estimation in this environment.
 - Legacy (type-0) transactions only, same as mainnet.
 
+**Whitelisting a deployer address on your fork:** the mainnet governance process in §5 doesn't apply here — on Chopsticks you control the chain state directly. `ContractDeployer` is a plain `StorageMap<EvmAddress, ()>`, so Chopsticks' `dev_setStorage` RPC can write the entry directly, bypassing governance entirely:
+
+```js
+import { ApiPromise, WsProvider } from "@polkadot/api";
+
+const api = await ApiPromise.create({ provider: new WsProvider("ws://localhost:8000") });
+const evmAddress = "0xYourAddress...";
+
+// Resolve the storage value's encoding dynamically rather than hardcoding it —
+// ContractDeployer's value type isn't a plain unit in this runtime's metadata.
+const valueTypeId = api.query.evmAccounts.contractDeployer.creator.meta.type.asMap.value.toNumber();
+const valueTypeName = api.registry.createLookupType(valueTypeId);
+let value = api.createType(valueTypeName, valueTypeName === "bool" ? true : undefined).toHex();
+if (value === "0x00") value = "0x01";
+
+const key = api.query.evmAccounts.contractDeployer.key(evmAddress);
+await api.rpc("dev_setStorage", [[key, value]]);
+
+// Verify:
+console.log((await api.query.evmAccounts.contractDeployer(evmAddress)).toHuman());
+```
+
 ## Sources
 
 - `hydration-node` runtime source (`runtime/hydradx/src/evm/`)
