@@ -1,7 +1,7 @@
 # Hydration EVM — Integration Guide
 
 > **Purpose:** Reference for third-party teams integrating with Hydration's EVM — wallets, bridges, contract deployers, and tooling authors.
-> **Last updated:** 2026-07-06
+> **Last updated:** 2026-07-07
 > **Sources:** `hydration-node` runtime source, live RPC verification, `hydration-ui` production config
 
 ---
@@ -12,9 +12,20 @@ Hydration's EVM compatibility is provided by `pallet_evm` + `pallet_ethereum` �
 
 - Standard Solidity tooling (Hardhat, Foundry) and EVM wallets (MetaMask) work against Hydration without a bridge or wrapped-chain layer.
 - EVM transactions and Substrate extrinsics settle in the same block, on the same state.
-- The EVM sits alongside Hydration's native pallets (Omnipool, money market, HOLLAR, etc.), and several of those pallets are exposed to EVM contracts via precompiles (see §4).
+- The EVM sits alongside Hydration's native pallets (Omnipool, money market, HOLLAR, etc.), and several of those pallets are exposed to EVM contracts via precompiles (see §5).
 
-## 2. Networks & RPC
+## 2. Account mapping (Substrate ↔ EVM)
+
+Hydration accounts live in two address spaces — 32-byte Substrate `AccountId`s and 20-byte EVM addresses — and the mapping between them (`pallet_evm_accounts`) is asymmetric.
+
+**Substrate → EVM (always available, no action needed):** every Substrate `AccountId` already has an implicit EVM address — simply its **first 20 bytes**. This is how a Substrate-signed extrinsic's identity shows up inside the EVM (e.g. as the caller for calls routed through the `Dispatch` precompile, §5).
+
+**EVM → Substrate** has two cases:
+
+- **Unbound (default).** For a raw EVM address with no explicit link, Hydration derives a synthetic "truncated" `AccountId`: `"ETH\0"` (4 bytes) + the 20-byte EVM address + 8 zero bytes = 32 bytes. This is what holds balance and pays fees for a plain `eth_sendRawTransaction` from a fresh EOA — a one-way derivation, not tied to any real sr25519/ed25519 keypair.
+- **Bound, via `evmAccounts.bind_evm_address()`.** A user with an existing Substrate account can submit this extrinsic (no arguments — both sides are derived from the caller) to link the two. It stores the **last 12 bytes** of their real `AccountId` in on-chain storage, keyed by their EVM address (which, per the rule above, is just the first 20 bytes of that same `AccountId`). After binding, the runtime reconstructs their real account as `evm_address (20 bytes) + stored last 12 bytes` — so an existing Substrate account's HDX/asset balances become directly usable from the EVM side, instead of a separate synthetic shadow account. Binding is optional; most raw EOA-signed EVM transactions never bind anything and just use the synthetic form.
+
+## 3. Networks & RPC
 
 **Mainnet** — EVM chain ID `222222` (`0x3640e`). All endpoints below serve both Substrate WSS and Ethereum JSON-RPC (`eth_*`) on the same host — there is no separate EVM-only endpoint. This list matches `hydration-ui`'s `production` branch config and was live-verified (`eth_chainId`) at time of writing:
 
@@ -57,7 +68,7 @@ Same chain ID as mainnet (`222222`) — there is no chain-ID-based way to distin
 
 Note the EVM "native" gas currency is a WETH-wrapped asset (`WethCurrency`), not HDX — Hydration's dynamic multi-currency fee system can also accept other registered assets for gas, but WETH is the default/primary one.
 
-## 3. JSON-RPC surface
+## 4. JSON-RPC surface
 
 **Supported:** `eth_*` (including filters and `eth_subscribe` pubsub), `net_*`, `web3_*`.
 
@@ -65,7 +76,7 @@ Note the EVM "native" gas currency is a WETH-wrapped asset (`WethCurrency`), not
 
 **Gas estimation:** `eth_estimateGas` had a known reliability issue for bounded Substrate accounts; this was fixed in a `hydration-node` runtime upgrade (April 2026). Standard `eth_estimateGas`-based flows (MetaMask, ethers/viem defaults) should work without needing a manual safety multiplier.
 
-## 4. Precompiles
+## 5. Precompiles
 
 Registered in `HydraDXPrecompiles<R>`:
 
@@ -81,19 +92,19 @@ Registered in `HydraDXPrecompiles<R>`:
 
 The EVM's execution target is **Osaka** (a superset of Shanghai/Cancun/Prague) — `PUSH0`, transient storage (`TSTORE`/`TLOAD`), and `MCOPY` are all supported.
 
-## 5. Contract deployment
+## 6. Contract deployment
 
 Standard Hardhat/Foundry deployment flows work against the mainnet RPC endpoints above (chain ID `222222`). Note: transactions must be **legacy (type-0)** — EIP-1559 typed transactions are not required and some deploy scripts explicitly pass `--legacy`/set `type: 0` for reliability.
 
 **Contract-deployer allowlist:** Hydration gates who may deploy new contracts via `pallet_evm_accounts`'s `ContractDeployer` allowlist. Adding an address requires an on-chain governance action (`add_contract_deployer`, via root or an OpenGov `GeneralAdmin`-track referendum) — this is not self-serve. If you're planning to deploy contracts on Hydration mainnet, reach out to the Hydration team ahead of time to get your deployer address whitelisted through governance.
 
-## 6. Contract verification
+## 7. Contract verification
 
 Hydration's block explorer is [hydration.subscan.io](https://hydration.subscan.io). It provides transaction/block lookup across both the Substrate and EVM sides of the chain, but does not offer Blockscout/Etherscan-style contract source verification.
 
 If you need verified-source publication for your contracts, contact the Hydration team directly — this is a known gap rather than a self-serve flow today.
 
-## 7. Local mainnet-fork testing with Chopsticks
+## 8. Local mainnet-fork testing with Chopsticks
 
 For local development against a fork of Hydration mainnet state, use the **`@galacticcouncil/chopsticks`** fork — not vanilla `@acala-network/chopsticks`, which lacks Frontier `eth_*` RPC support. (Note: `galacticcouncil/fork` is a separate, zombienet-based tool used to run Hydration's own "lark" testnet instances — it is not Chopsticks and isn't the right tool for local single-node fork testing.)
 
@@ -107,7 +118,7 @@ This serves both Substrate and `eth_*` JSON-RPC on the same port (default `ws://
 - `eth_feeHistory` and `eth_maxPriorityFeePerGas` are synthetic, derived from a static `eth_gasPrice` under a fork — don't rely on fee-history-based gas estimation in this environment.
 - Legacy (type-0) transactions only, same as mainnet.
 
-**Whitelisting a deployer address on your fork:** the mainnet governance process in §5 doesn't apply here — on Chopsticks you control the chain state directly. `ContractDeployer` is a plain `StorageMap<EvmAddress, ()>`, so Chopsticks' `dev_setStorage` RPC can write the entry directly, bypassing governance entirely:
+**Whitelisting a deployer address on your fork:** the mainnet governance process in §6 doesn't apply here — on Chopsticks you control the chain state directly. `ContractDeployer` is a plain `StorageMap<EvmAddress, ()>`, so Chopsticks' `dev_setStorage` RPC can write the entry directly, bypassing governance entirely:
 
 ```js
 import { ApiPromise, WsProvider } from "@polkadot/api";
